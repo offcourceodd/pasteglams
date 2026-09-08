@@ -603,7 +603,6 @@ MAKE_HOOK(CTFGameStats_FindPlayerStats, S::CTFGameStats_FindPlayerStats(), void*
 	return CALL_ORIGINAL(rcx, pPlayer);
 }
 #endif
-
 void CCritHack::Draw(CTFPlayer* pLocal)
 {
 	if (!(Vars::Menu::Indicators.Value & Vars::Menu::IndicatorsEnum::CritHack) || !I::EngineClient->IsInGame())
@@ -650,7 +649,6 @@ void CCritHack::Draw(CTFPlayer* pLocal)
 	}
 	else if (!bIsCritBanned && iPotentialCrits > 0)
 	{
-		// BAR FILLS BASED ON AVAILABLE CRITS VS TOTAL CRITS
 		flProgress = float(iAvailableCrits) / float(iPotentialCrits);
 		flProgress = std::clamp(flProgress, 0.0f, 1.0f);
 
@@ -661,92 +659,214 @@ void CCritHack::Draw(CTFPlayer* pLocal)
 	}
 	else if (bIsCritBanned)
 	{
-		// Show damage needed to flip
 		float flDamageNeeded = ceilf(m_flDamageTilFlip);
-		// Normalize to a progress bar (assuming max ~500 damage needed)
 		flProgress = std::min(flDamageNeeded / 500.0f, 1.0f);
 	}
 
-	// Draw status text - ALL WHITE
+	// --- DIMENSIONS ---
+	constexpr int PANEL_WIDTH = 180;
+	const int scaledWidth = H::Draw.Scale(PANEL_WIDTH, Scale_Round);
+	const int panelX = dtPos.x - scaledWidth / 2;
+	const int panelY = dtPos.y - H::Draw.Scale(6, Scale_Round);
+
+	// --- 1. STATUS TEXT & CRIT COUNT ---
 	std::string sStatusText;
-	if (bIsCritReady && !bIsCritBanned)
+	std::string sCritCount;
+
+	if (bIsCritBanned)
 	{
-		sStatusText = "Crit Ready";
+		sStatusText = "⚠ DEAL " + std::to_string((int)ceilf(m_flDamageTilFlip)) + " DMG";
+		sCritCount = std::to_string(iAvailableCrits) + " / " + std::to_string(iPotentialCrits) + " crits (banned)";
 	}
-	else if (bIsCritBanned)
+	else if (bIsCritReady)
 	{
-		sStatusText = "Deal " + std::to_string((int)ceilf(m_flDamageTilFlip)) + " damage";
+		sStatusText = "⚡ CRIT READY";
+		sCritCount = std::to_string(iAvailableCrits) + " / " + std::to_string(iPotentialCrits) + " crits";
 	}
-	else if (iPotentialCrits > 0 && !bIsCritBanned)
+	else if (iPotentialCrits > 0)
 	{
 		int iShots = m_iNextCrit;
 		if (iShots > 0 && iAvailableCrits == 0)
 		{
-			sStatusText = "Crit in " + std::to_string(iShots) + " shot" + (iShots == 1 ? "" : "s");
+			sStatusText = "⚡ CRIT IN " + std::to_string(iShots) + " SHOT" + (iShots == 1 ? "" : "S");
 		}
+		else
+		{
+			sStatusText = "⚡ BUILDING CRITS";
+		}
+		sCritCount = std::to_string(iAvailableCrits) + " / " + std::to_string(iPotentialCrits) + " crits";
 	}
 
+	// Draw status text
 	if (!sStatusText.empty())
 	{
-		H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + 2, Color_t(255, 255, 255, 255), Vars::Menu::Theme::Background.Value, ALIGN_TOP, sStatusText.c_str());
+		Color_t textColor = bIsCritBanned ? Color_t(255, 50, 50, 255) : Color_t(255, 255, 255, 255);
+		H::Draw.String(
+			fFont,
+			dtPos.x,
+			panelY,
+			textColor,
+			ALIGN_TOP,
+			sStatusText.c_str()
+		);
 	}
 
-	// Draw the bar with darkening effect
-	int iSizeX = H::Draw.Scale(100, Scale_Round), iSizeY = H::Draw.Scale(12, Scale_Round);
-	int iPosX = dtPos.x - iSizeX / 2, iPosY = dtPos.y + fFont.m_nTall + H::Draw.Scale(4) + 1;
+	// --- 2. MODERN GLASS TICK BAR ---
+	const int barHeight = H::Draw.Scale(14, Scale_Round);
+	const int barY = panelY + fFont.m_nTall + H::Draw.Scale(4, Scale_Round);
+	const int barWidth = scaledWidth;
+	const int barX = panelX;
 
-	// Subtle dark background that fades as progress increases
-	Color_t darkBg = Color_t(0, 0, 0, static_cast<int>(80 * (1.0f - flProgress)));
-	H::Draw.FillRect(iPosX - H::Draw.Scale(2, Scale_Round), iPosY - H::Draw.Scale(2, Scale_Round),
-		iSizeX + H::Draw.Scale(4, Scale_Round), iSizeY + H::Draw.Scale(4, Scale_Round), darkBg);
+	// Bar background
+	H::Draw.FillRect(
+		barX,
+		barY,
+		barWidth,
+		barHeight,
+		Color_t(10, 15, 25, 180)
+	);
 
-	// Border with constant visibility but subtle brightness change
-	Color_t borderColor = Vars::Menu::Theme::Accent.Value;
-	borderColor.a = static_cast<int>(80 + (flProgress * 175));
-	H::Draw.LineRect(iPosX, iPosY, iSizeX, iSizeY, borderColor);
+	// Bar inner glow
+	H::Draw.FillRect(
+		barX + H::Draw.Scale(1, Scale_Round),
+		barY + H::Draw.Scale(1, Scale_Round),
+		barWidth - H::Draw.Scale(2, Scale_Round),
+		barHeight - H::Draw.Scale(2, Scale_Round),
+		Color_t(0, 0, 0, 100)
+	);
 
-	// Fill bar
+	// Progress fill with glassy gradient
 	if (flProgress > 0.0f)
 	{
-		iSizeX -= H::Draw.Scale(2, Scale_Ceil) * 2;
-		iSizeY -= H::Draw.Scale(2, Scale_Ceil) * 2;
-		iPosX += H::Draw.Scale(2, Scale_Round);
-		iPosY += H::Draw.Scale(2, Scale_Round);
-
-		H::Draw.StartClipping(iPosX, iPosY, iSizeX * flProgress, iSizeY);
+		const int fillWidth = static_cast<int>(barWidth * flProgress);
+		const int fillX = barX + H::Draw.Scale(1, Scale_Round);
+		const int fillY = barY + H::Draw.Scale(1, Scale_Round);
+		const int fillH = barHeight - H::Draw.Scale(2, Scale_Round);
 
 		// Choose color based on state
 		Color_t fillColor;
-		if (bIsCritReady && !bIsCritBanned)
-			fillColor = Vars::Menu::Theme::Accent.Value;  // Dark blue when ready
-		else if (bIsCritBanned)
-			fillColor = Vars::Colors::IndicatorTextBad.Value;  // Red when banned
+		if (bIsCritBanned)
+			fillColor = Color_t(255, 50, 50, 255); // Red when banned
+		else if (bIsCritReady)
+			fillColor = Vars::Menu::Theme::Accent.Value; // Theme color when ready
 		else
-			fillColor = Vars::Menu::Theme::Accent.Value;   // Dark blue when building
+			fillColor = Vars::Menu::Theme::Accent.Value; // Theme color when building
 
-		fillColor.a = static_cast<int>(60 + (flProgress * 195));
-		H::Draw.FillRect(iPosX, iPosY, iSizeX, iSizeY, fillColor);
-		H::Draw.EndClipping();
+		fillColor.a = 180 + static_cast<int>(flProgress * 75);
+
+		H::Draw.FillRect(
+			fillX,
+			fillY,
+			fillWidth,
+			fillH,
+			fillColor
+		);
+
+		// Glass shine on top of fill
+		H::Draw.FillRect(
+			fillX,
+			fillY,
+			fillWidth,
+			fillH / 2,
+			Color_t(255, 255, 255, 30 + static_cast<int>(flProgress * 40))
+		);
+
+		// Fill edge glow
+		if (flProgress < 0.95f && fillWidth > H::Draw.Scale(10, Scale_Round))
+		{
+			H::Draw.FillRect(
+				fillX + fillWidth - H::Draw.Scale(2, Scale_Round),
+				fillY,
+				H::Draw.Scale(2, Scale_Round),
+				fillH,
+				Color_t(255, 255, 255, 40 + static_cast<int>(flProgress * 50))
+			);
+		}
 	}
 
-	// Draw crit count - ALL WHITE
-	if (iPotentialCrits > 0 && !bIsCritBanned)
+	// Bar border
+	H::Draw.LineRect(
+		barX,
+		barY,
+		barWidth,
+		barHeight,
+		Color_t(255, 255, 255, 15 + static_cast<int>(flProgress * 30))
+	);
+
+	// --- 3. COMPLETION PULSE (only when crit ready, not banned) ---
+	if (bIsCritReady && !bIsCritBanned)
 	{
-		std::string sCritCount = std::to_string(iAvailableCrits) + " / " + std::to_string(iPotentialCrits) + " crits";
-		H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + fFont.m_nTall + H::Draw.Scale(22, Scale_Round) + 2,
-			Color_t(255, 255, 255, 255), Vars::Menu::Theme::Background.Value, ALIGN_TOP, sCritCount.c_str());
-	}
-	else if (iPotentialCrits > 0 && bIsCritBanned)
-	{
-		std::string sCritCount = std::to_string(iAvailableCrits) + " / " + std::to_string(iPotentialCrits) + " crits (banned)";
-		H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + fFont.m_nTall + H::Draw.Scale(22, Scale_Round) + 2,
-			Color_t(255, 255, 255, 255), Vars::Menu::Theme::Background.Value, ALIGN_TOP, sCritCount.c_str());
+		const float pulse = (sinf(I::GlobalVars->curtime * 3.0f) + 1.0f) / 2.0f;
+		const int pulseAlpha = 20 + static_cast<int>(pulse * 60);
+
+		// Pulse glow using theme color
+		Color_t pulseColor = Vars::Menu::Theme::Accent.Value;
+		pulseColor.a = pulseAlpha;
+
+		H::Draw.FillRect(
+			barX - H::Draw.Scale(2, Scale_Round),
+			barY - H::Draw.Scale(2, Scale_Round),
+			barWidth + H::Draw.Scale(4, Scale_Round),
+			barHeight + H::Draw.Scale(4, Scale_Round),
+			pulseColor
+		);
+
+		// Inner pulse glow
+		Color_t innerPulse = Vars::Menu::Theme::Accent.Value;
+		innerPulse.a = pulseAlpha / 2;
+
+		H::Draw.FillRect(
+			barX,
+			barY - H::Draw.Scale(1, Scale_Round),
+			barWidth,
+			barHeight + H::Draw.Scale(2, Scale_Round),
+			innerPulse
+		);
 	}
 
-	// Debug info - ALL WHITE
+	// --- 4. CRIT COUNT TEXT (below the bar) ---
+	if (!sCritCount.empty())
+	{
+		Color_t countColor = bIsCritBanned ? Color_t(255, 50, 50, 200) : Color_t(255, 255, 255, 200);
+		H::Draw.String(
+			fFont,
+			dtPos.x,
+			barY + barHeight + H::Draw.Scale(4, Scale_Round),
+			countColor,
+			ALIGN_TOP,
+			sCritCount.c_str()
+		);
+	}
+
+	// --- 5. TICK MARKS ---
+	{
+		const int tickMarkCount = std::min(8, iPotentialCrits);
+		if (tickMarkCount > 1 && iPotentialCrits > 0)
+		{
+			const float tickSpacing = static_cast<float>(barWidth - H::Draw.Scale(2, Scale_Round)) / tickMarkCount;
+			const int tickY = barY + H::Draw.Scale(2, Scale_Round);
+			const int tickH = barHeight - H::Draw.Scale(4, Scale_Round);
+
+			for (int i = 1; i < tickMarkCount; i++)
+			{
+				const int tickX = barX + H::Draw.Scale(1, Scale_Round) + static_cast<int>(i * tickSpacing);
+				const bool isFilled = static_cast<float>(i) / tickMarkCount <= flProgress;
+
+				H::Draw.Line(
+					tickX,
+					tickY,
+					tickX,
+					tickY + tickH,
+					Color_t(255, 255, 255, isFilled ? 20 + static_cast<int>(flProgress * 30) : 8)
+				);
+			}
+		}
+	}
+
+	// Debug info (unchanged)
 	if (Vars::Debug::Info.Value)
 	{
-		int iDebugY = dtPos.y + fFont.m_nTall + H::Draw.Scale(40, Scale_Round) + 2;
+		int iDebugY = barY + barHeight + fFont.m_nTall + H::Draw.Scale(8, Scale_Round);
 		H::Draw.StringOutlined(fFont, dtPos.x, iDebugY, Color_t(255, 255, 255, 255), Vars::Menu::Theme::Background.Value, ALIGN_TOP,
 			("RangedDamage: " + std::to_string(m_iRangedDamage) + ", CritDamage: " + std::to_string(m_iCritDamage)).c_str());
 		iDebugY += fFont.m_nTall + 2;
