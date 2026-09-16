@@ -308,12 +308,23 @@ NAMESPACE_BEGIN(Vars)
 			CVar(PeekAmount, "Peek amount", 1, NOSAVE | DEBUGVAR, 0, 5);
 			CVar(BoneSizeSubtract, "Bone size subtract", 1.f, NOSAVE | DEBUGVAR | SLIDER_MIN, 0.f, 4.f, 0.25f);
 			CVar(BoneSizeMinimumScale, "Bone size minimum scale", 1.f, NOSAVE | DEBUGVAR | SLIDER_CLAMP, 0.f, 1.f, 0.1f);
-		NAMESPACE_END(HITSCAN)
+		NAMESPACE_END(HITSCAN) //aa
 
 		NAMESPACE_BEGIN(Projectile)
 			CVarEnum(StrafePrediction, VA_LIST("Predict", "Strafe prediction"), 0b11, DROPDOWN_MULTI, "Off",
-				VA_LIST("Air strafing", "Ground strafing"),
-				Air = 1 << 0, Ground = 1 << 1);
+				VA_LIST("Air strafing", "Ground strafing", "##Divider", "Counter-strafe", "##Divider", "Use on direct", "Use on splash"),
+				Air = 1 << 0, Ground = 1 << 1, CounterStrafe = 1 << 2, UseOnDirect = 1 << 3, UseOnSplash = 1 << 4,
+				All = Air | Ground | CounterStrafe | UseOnDirect | UseOnSplash);
+		CVar(CounterStrafeTicks, "Counter-strafe ticks", 8, NOSAVE | DEBUGVAR | SLIDER_MIN, 1, 22);
+		CVar(CounterStrafeMaxPaths, "Counter-strafe paths", 3, NOSAVE | DEBUGVAR | SLIDER_MIN, 1, 6);
+		CVar(CounterStrafeMinSpeed, "Counter-strafe min speed", 50.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 300.f, 10.f);
+		CVar(CounterStrafeAirborne, "Counter-strafe airborne", true, NOSAVE | DEBUGVAR);
+		CVar(CounterStrafeGroundAccel, "Counter-strafe ground accel", 10.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 1.f, 30.f, 1.f);
+		CVar(CounterStrafeGroundFriction, "Counter-strafe ground friction", 4.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 1.f, 15.f, 0.5f);
+		CVar(CounterStrafeAirAccel, "Counter-strafe air accel", 12.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 1.f, 100.f, 1.f);
+		CVar(CounterStrafeAirWishSpeedCap, "Counter-strafe air cap", 30.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 100.f, 5.f);
+		CVar(CounterStrafeDrawPaths, "Counter-strafe draw paths", false, NOSAVE | DEBUGVAR);
+		CVar(CounterStrafeReactionTicks, "Counter-strafe reaction ticks", 3, NOSAVE | DEBUGVAR | SLIDER_MIN, 0, 16);
 			CVarEnum(SplashPrediction, VA_LIST("Splash", "Splash prediction"), 0, NONE, nullptr,
 				VA_LIST("Off", "Include", "Prefer", "Only"),
 				Off, Include, Prefer, Only);
