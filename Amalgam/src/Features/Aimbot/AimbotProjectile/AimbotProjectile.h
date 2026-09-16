@@ -78,13 +78,25 @@ struct Direct_t : History_t
 	float m_flTime;
 	Vec3 m_vPoint;
 	int m_iPriority;
+	bool m_bCounterStrafe = false;
 };
 struct Splash_t : History_t
 {
 	float m_flTimeTo;
+	bool m_bCounterStrafe = false;
 };
 using DirectHistory_t = std::unordered_map<uint8_t, std::vector<Direct_t>>;
 using SplashHistory_t = std::unordered_map<uint8_t, std::vector<Splash_t>>;
+
+struct CounterStrafeInfo_t
+{
+	Vec3 m_vVelocity = {};
+	Vec3 m_vAcceleration = {};
+	float m_flFriction = 0.f;
+	float m_flStoppingDistance = 0.f;
+	int m_iTicksToStop = 0;
+};
+
 
 class CAimbotProjectile
 {
@@ -101,6 +113,10 @@ private:
 	bool HandleDirect(DirectHistory_t& vDirectHistory);
 	bool HandleSplash(SplashHistory_t& vSplashHistory);
 
+	bool InitializeCounterStrafe(Target_t& tTarget, CTFPlayer* pLocal);
+	void RunCounterStrafeTick(int iTick, Target_t& tTarget, std::vector<Vec3>& vPredictedPositions);
+	void RestoreCounterStrafe();
+
 	int CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBase* pWeapon, bool bUpdate = true);
 	bool RunMain(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, CUserCmd* pCmd);
 
@@ -116,6 +132,10 @@ private:
 	std::vector<Setup_t> m_vSplashPoints = {};
 
 	bool m_bLastTickHeld = false;
+
+	std::vector<MoveStorage> m_vMoveStorages = {};
+	std::vector<Vec3> m_vCounterStrafePaths = {};
+	bool m_bUseCounterStrafe = false;
 
 	float m_flTimeTo = std::numeric_limits<float>::max();
 	std::vector<Vec3> m_vPlayerPath = {};
@@ -140,3 +160,4 @@ public:
 };
 
 ADD_FEATURE(CAimbotProjectile, AimbotProjectile);
+
