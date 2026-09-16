@@ -707,7 +707,7 @@ float CProjectileSimulation::GetDesync()
 	return I::GlobalVars->curtime - TICKS_TO_TIME(I::ClientState->m_ClockDriftMgr.m_nServerTick) - F::Backtrack.GetReal();
 }
 
-void CProjectileSimulation::SetupTrace(CTraceFilterCollideable& filter, int& nMask, CTFWeaponBase* pWeapon, int nTick, bool bInterp)
+void CProjectileSimulation::SetupTrace(CTraceFilterCollideable& filter, int& nMask, CTFWeaponBase* pWeapon, int nTick, bool bInterp) //a
 {
 	switch (nTick)
 	{
