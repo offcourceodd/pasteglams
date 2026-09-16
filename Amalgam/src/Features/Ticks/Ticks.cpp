@@ -414,41 +414,327 @@ void CTicks::Draw(CTFPlayer* pLocal)
 	const DragBox_t dtPos = Vars::Menu::TicksDisplay.Value;
 	const auto& fFont = H::Fonts.GetFont(FONT_INDICATORS);
 
+	// Speedhack indicator
 	if (m_bSpeedhack)
-		return H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + 2, Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value, ALIGN_TOP, std::format("Speedhack x{}", Vars::Speedhack::Scale.Value).c_str());
-
-	int iAntiAimTicks = F::AntiAim.YawOn() ? F::AntiAim.AntiAimTicks() : 0;
-	int iTicks = std::clamp(m_iShiftedTicks + std::max(I::ClientState->chokedcommands - iAntiAimTicks, 0), 0, m_iMaxUsrCmdProcessTicks);
-	int iMax = std::max(m_iMaxUsrCmdProcessTicks - iAntiAimTicks, 0);
-
-	float flRatio = float(iTicks) / float(iMax);
-	int iSizeX = H::Draw.Scale(100, Scale_Round), iSizeY = H::Draw.Scale(12, Scale_Round);
-	int iPosX = dtPos.x - iSizeX / 2, iPosY = dtPos.y + fFont.m_nTall + H::Draw.Scale(4) + 1;
-
-	H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + 2, Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value, ALIGN_TOP, std::format("Ticks {} / {}", iTicks, iMax).c_str());
-	if (m_iWait)
-		H::Draw.StringOutlined(fFont, dtPos.x, dtPos.y + fFont.m_nTall + H::Draw.Scale(18, Scale_Round) + 1, Vars::Menu::Theme::Active.Value, Vars::Menu::Theme::Background.Value, ALIGN_TOP, "Not Ready");
-
-	// Subtle dark background that fades as ticks increase
-	Color_t darkBg = Color_t(0, 0, 0, static_cast<int>(80 * (1.0f - flRatio)));
-	H::Draw.FillRect(iPosX - H::Draw.Scale(2, Scale_Round), iPosY - H::Draw.Scale(2, Scale_Round),
-		iSizeX + H::Draw.Scale(4, Scale_Round), iSizeY + H::Draw.Scale(4, Scale_Round), darkBg);
-
-	// Border with constant visibility but subtle brightness change
-	Color_t borderColor = Vars::Menu::Theme::Accent.Value;
-	borderColor.a = static_cast<int>(80 + (flRatio * 175)); // Always at least somewhat visible
-	H::Draw.LineRect(iPosX, iPosY, iSizeX, iSizeY, borderColor);
-
-	if (flRatio)
 	{
-		iSizeX -= H::Draw.Scale(2, Scale_Ceil) * 2, iSizeY -= H::Draw.Scale(2, Scale_Ceil) * 2;
-		iPosX += H::Draw.Scale(2, Scale_Round), iPosY += H::Draw.Scale(2, Scale_Round);
-		H::Draw.StartClipping(iPosX, iPosY, iSizeX * flRatio, iSizeY);
+		H::Draw.StringOutlined(
+			fFont,
+			dtPos.x,
+			dtPos.y + 2,
+			Vars::Menu::Theme::Active.Value,
+			Vars::Menu::Theme::Background.Value,
+			ALIGN_TOP,
+			std::format("Speedhack x{}", Vars::Speedhack::Scale.Value).c_str()
+		);
+		return;
+	}
 
-		// Fill with better visibility - darker at start, brighter at end
-		Color_t fillColor = Vars::Menu::Theme::Accent.Value;
-		fillColor.a = static_cast<int>(60 + (flRatio * 195)); // Always at least somewhat visible
-		H::Draw.FillRect(iPosX, iPosY, iSizeX, iSizeY, fillColor);
-		H::Draw.EndClipping();
+	// =========================================================
+	// TICK CALCULATION
+	// =========================================================
+
+	int iAntiAimTicks = F::AntiAim.YawOn()
+		? F::AntiAim.AntiAimTicks()
+		: 0;
+
+	int iTicks = std::clamp(
+		m_iShiftedTicks +
+		std::max(I::ClientState->chokedcommands - iAntiAimTicks, 0),
+		0,
+		m_iMaxUsrCmdProcessTicks
+	);
+
+	int iMax = std::max(
+		m_iMaxUsrCmdProcessTicks - iAntiAimTicks,
+		0
+	);
+
+	// Prevent division by zero
+	float flRatio = iMax > 0
+		? std::clamp(
+			static_cast<float>(iTicks) / static_cast<float>(iMax),
+			0.0f,
+			1.0f
+		)
+		: 0.0f;
+
+	// =========================================================
+	// DIMENSIONS
+	// Same general proportions as CritHack
+	// =========================================================
+
+	constexpr int PANEL_WIDTH = 180;
+
+	const int scaledWidth =
+		H::Draw.Scale(PANEL_WIDTH, Scale_Round);
+
+	const int panelX =
+		dtPos.x - scaledWidth / 2;
+
+	const int panelY =
+		dtPos.y - H::Draw.Scale(6, Scale_Round);
+
+	const int barHeight =
+		H::Draw.Scale(14, Scale_Round);
+
+	const int barY =
+		panelY +
+		fFont.m_nTall +
+		H::Draw.Scale(4, Scale_Round);
+
+	const int barWidth = scaledWidth;
+	const int barX = panelX;
+
+	// =========================================================
+	// STATUS TEXT
+	// =========================================================
+
+	std::string sStatusText;
+
+	if (m_iWait)
+	{
+		sStatusText = "⚡ TICKS NOT READY";
+	}
+	else if (iMax > 0 && iTicks >= iMax)
+	{
+		sStatusText = "⚡ TICKS READY";
+	}
+	else
+	{
+		sStatusText = "⚡ BUILDING TICKS";
+	}
+
+	H::Draw.String(
+		fFont,
+		dtPos.x,
+		panelY,
+		Vars::Menu::Theme::Active.Value,
+		ALIGN_TOP,
+		sStatusText.c_str()
+	);
+
+	// =========================================================
+	// GLASS BAR BACKGROUND
+	// =========================================================
+
+	H::Draw.FillRect(
+		barX,
+		barY,
+		barWidth,
+		barHeight,
+		Color_t(10, 15, 25, 180)
+	);
+
+	// Inner dark glass
+	H::Draw.FillRect(
+		barX + H::Draw.Scale(1, Scale_Round),
+		barY + H::Draw.Scale(1, Scale_Round),
+		barWidth - H::Draw.Scale(2, Scale_Round),
+		barHeight - H::Draw.Scale(2, Scale_Round),
+		Color_t(0, 0, 0, 100)
+	);
+
+	// =========================================================
+	// PROGRESS FILL
+	// =========================================================
+
+	if (flRatio > 0.0f)
+	{
+		const int fillWidth =
+			static_cast<int>(
+				(barWidth - H::Draw.Scale(2, Scale_Round))
+				* flRatio
+				);
+
+		const int fillX =
+			barX + H::Draw.Scale(1, Scale_Round);
+
+		const int fillY =
+			barY + H::Draw.Scale(1, Scale_Round);
+
+		const int fillH =
+			barHeight - H::Draw.Scale(2, Scale_Round);
+
+		Color_t fillColor =
+			Vars::Menu::Theme::Accent.Value;
+
+		fillColor.a =
+			180 + static_cast<int>(flRatio * 75);
+
+		// Main fill
+		H::Draw.FillRect(
+			fillX,
+			fillY,
+			fillWidth,
+			fillH,
+			fillColor
+		);
+
+		// =====================================================
+		// GLASS SHINE
+		// =====================================================
+
+		H::Draw.FillRect(
+			fillX,
+			fillY,
+			fillWidth,
+			fillH / 2,
+			Color_t(
+				255,
+				255,
+				255,
+				30 + static_cast<int>(flRatio * 40)
+			)
+		);
+
+		// =====================================================
+		// FILL EDGE HIGHLIGHT
+		// =====================================================
+
+		if (flRatio < 0.95f &&
+			fillWidth > H::Draw.Scale(10, Scale_Round))
+		{
+			H::Draw.FillRect(
+				fillX + fillWidth - H::Draw.Scale(2, Scale_Round),
+				fillY,
+				H::Draw.Scale(2, Scale_Round),
+				fillH,
+				Color_t(
+					255,
+					255,
+					255,
+					40 + static_cast<int>(flRatio * 50)
+				)
+			);
+		}
+	}
+
+	// =========================================================
+	// BAR BORDER
+	// =========================================================
+
+	H::Draw.LineRect(
+		barX,
+		barY,
+		barWidth,
+		barHeight,
+		Color_t(
+			255,
+			255,
+			255,
+			15 + static_cast<int>(flRatio * 30)
+		)
+	);
+
+	// =========================================================
+	// READY PULSE
+	// Same style as CritHack
+	// =========================================================
+
+	if (!m_iWait && iMax > 0 && iTicks >= iMax)
+	{
+		const float pulse =
+			(sinf(I::GlobalVars->curtime * 3.0f) + 1.0f) / 2.0f;
+
+		const int pulseAlpha =
+			20 + static_cast<int>(pulse * 60);
+
+		Color_t pulseColor =
+			Vars::Menu::Theme::Accent.Value;
+
+		pulseColor.a = pulseAlpha;
+
+		// Outer glow
+		H::Draw.FillRect(
+			barX - H::Draw.Scale(2, Scale_Round),
+			barY - H::Draw.Scale(2, Scale_Round),
+			barWidth + H::Draw.Scale(4, Scale_Round),
+			barHeight + H::Draw.Scale(4, Scale_Round),
+			pulseColor
+		);
+
+		// Inner glow
+		Color_t innerPulse =
+			Vars::Menu::Theme::Accent.Value;
+
+		innerPulse.a = pulseAlpha / 2;
+
+		H::Draw.FillRect(
+			barX,
+			barY - H::Draw.Scale(1, Scale_Round),
+			barWidth,
+			barHeight + H::Draw.Scale(2, Scale_Round),
+			innerPulse
+		);
+	}
+
+	// =========================================================
+	// TICK COUNT
+	// =========================================================
+
+	std::string sTickCount =
+		std::to_string(iTicks) +
+		" / " +
+		std::to_string(iMax) +
+		" ticks";
+
+	H::Draw.String(
+		fFont,
+		dtPos.x,
+		barY + barHeight + H::Draw.Scale(4, Scale_Round),
+		m_iWait
+		? Color_t(255, 255, 255, 180)
+		: Color_t(255, 255, 255, 200),
+		ALIGN_TOP,
+		sTickCount.c_str()
+	);
+
+	// =========================================================
+	// TICK MARKS
+	// =========================================================
+
+	{
+		const int tickMarkCount =
+			std::min(8, iMax);
+
+		if (tickMarkCount > 1)
+		{
+			const float tickSpacing =
+				static_cast<float>(
+					barWidth - H::Draw.Scale(2, Scale_Round)
+					) / tickMarkCount;
+
+			const int tickY =
+				barY + H::Draw.Scale(2, Scale_Round);
+
+			const int tickH =
+				barHeight - H::Draw.Scale(4, Scale_Round);
+
+			for (int i = 1; i < tickMarkCount; i++)
+			{
+				const int tickX =
+					barX +
+					H::Draw.Scale(1, Scale_Round) +
+					static_cast<int>(i * tickSpacing);
+
+				const bool isFilled =
+					static_cast<float>(i) / tickMarkCount <= flRatio;
+
+				H::Draw.Line(
+					tickX,
+					tickY,
+					tickX,
+					tickY + tickH,
+					Color_t(
+						255,
+						255,
+						255,
+						isFilled
+						? 20 + static_cast<int>(flRatio * 30)
+						: 8
+					)
+				);
+			}
+		}
 	}
 }
