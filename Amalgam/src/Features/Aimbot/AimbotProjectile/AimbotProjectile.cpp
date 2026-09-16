@@ -291,6 +291,251 @@ static inline bool AirSplash(CTFWeaponBase* pWeapon, Info_t& tInfo)
 	return false;
 }
 
+// ─── Counter-strafe prediction helpers ──────────────────────────────────────a
+
+static inline bool CounterStrafeEnabled()
+{
+	return Vars::Aimbot::Projectile::StrafePrediction.Value & Vars::Aimbot::Projectile::StrafePredictionEnum::CounterStrafe;
+}
+
+static inline bool CounterStrafeOnDirect()
+{
+	return Vars::Aimbot::Projectile::StrafePrediction.Value & Vars::Aimbot::Projectile::StrafePredictionEnum::UseOnDirect;
+}
+
+static inline bool CounterStrafeOnSplash()
+{
+	return Vars::Aimbot::Projectile::StrafePrediction.Value & Vars::Aimbot::Projectile::StrafePredictionEnum::UseOnSplash;
+}
+
+// Cached convar values — add these near the top of the file (after includes)
+struct CounterStrafeVars_t
+{
+	float flGravity = 800.f;
+	float flFriction = 4.f;
+	float flStopSpeed = 100.f;
+	float flAccelerate = 10.f;
+	float flAirAccelerate = 12.f;
+	float flJumpImpulse = 268.f;
+
+	void Refresh()
+	{
+		static auto sv_gravity = H::ConVars.FindVar("sv_gravity");
+		static auto sv_friction = H::ConVars.FindVar("sv_friction");
+		static auto sv_stopspeed = H::ConVars.FindVar("sv_stopspeed");
+		static auto sv_accelerate = H::ConVars.FindVar("sv_accelerate");
+		static auto sv_airaccelerate = H::ConVars.FindVar("sv_airaccelerate");
+		static auto sv_jump_impulse = H::ConVars.FindVar("sv_jump_impulse");
+
+		if (sv_gravity)       flGravity = sv_gravity->GetFloat();
+		if (sv_friction)      flFriction = sv_friction->GetFloat();
+		if (sv_stopspeed)     flStopSpeed = sv_stopspeed->GetFloat();
+		if (sv_accelerate)    flAccelerate = sv_accelerate->GetFloat();
+		if (sv_airaccelerate) flAirAccelerate = sv_airaccelerate->GetFloat();
+		if (sv_jump_impulse)  flJumpImpulse = sv_jump_impulse->GetFloat();
+		else                  flJumpImpulse = sqrtf(2.f * flGravity * 45.f); // TF2 fallback
+	}
+};
+static CounterStrafeVars_t s_tCS;
+
+static inline void SimulateFrictionOnly(Vec3& vVelocity, float flFriction, bool bOnGround, float flFrametime)
+{
+	if (!bOnGround || flFriction <= 0.f)
+		return;
+
+	float flSpeed = vVelocity.Length();
+	if (flSpeed <= 0.1f)
+		return;
+
+	float flControl = std::max(flSpeed, s_tCS.flStopSpeed);
+	float flDrop = flControl * flFriction * flFrametime;
+	float flNewSpeed = std::max(0.f, flSpeed - flDrop);
+	if (flNewSpeed > 0.f)
+		vVelocity *= flNewSpeed / flSpeed;
+	else
+		vVelocity = {};
+}
+
+static inline void SimulateStrafeTick(Vec3& vVelocity, Vec3& vPosition, const Vec3& vWishDir,
+	float flMaxSpeed, float flAccel, float flFriction, bool bOnGround, float flFrametime)
+{
+	constexpr float flAirWishSpeedCap = 30.f; // PM_AirAccelerate wishspd cap
+
+	// 1. Friction (ground only) — happens first, matches CGameMovement order
+	SimulateFrictionOnly(vVelocity, flFriction, bOnGround, flFrametime);
+
+	// 2. Acceleration
+	if (!vWishDir.IsZero())
+	{
+		if (bOnGround)
+		{
+			// PM_Accelerate: addspeed uses maxspeed, accelspeed uses maxspeed
+			float flCurrentSpeed = vVelocity.Dot(vWishDir);
+			float flAddSpeed = flMaxSpeed - flCurrentSpeed;
+			if (flAddSpeed > 0.f)
+			{
+				float flAccelSpeed = flAccel * flMaxSpeed * flFrametime;
+				if (flAccelSpeed > flAddSpeed)
+					flAccelSpeed = flAddSpeed;
+				vVelocity += vWishDir * flAccelSpeed;
+			}
+		}
+		else
+		{
+			// PM_AirAccelerate: addspeed uses CAPPED wishspd,
+			//                   accelspeed uses UNCAPPED wishspeed (= flMaxSpeed)
+			float flWishSpd = std::min(flMaxSpeed, flAirWishSpeedCap);
+			float flCurrentSpeed = vVelocity.Dot(vWishDir);
+			float flAddSpeed = flWishSpd - flCurrentSpeed;
+			if (flAddSpeed > 0.f)
+			{
+				float flAccelSpeed = flAccel * flMaxSpeed * flFrametime; // uncapped!
+				if (flAccelSpeed > flAddSpeed)
+					flAccelSpeed = flAddSpeed;
+				vVelocity += vWishDir * flAccelSpeed;
+			}
+		}
+	}
+
+	
+}
+
+// Finer 30° fan, and writes into a caller-provided buffer (no allocation)
+static inline void GetCounterStrafeDirs(const Vec3& vVelocity, float flMinSpeed,
+	std::vector<Vec3>& vDirsOut)
+{
+	vDirsOut.clear();
+	vDirsOut.push_back({}); // "no keys" always first
+
+	Vec3 vVel2D = vVelocity; vVel2D.z = 0.f;
+	float flSpeed = vVel2D.Length();
+	if (flSpeed < flMinSpeed)
+		return;
+
+	Vec3 vDir = vVel2D / flSpeed;
+
+	// Prefer 8 main compass-ish dirs (real WASD combinations at 45°)
+	// plus finer 30° steps for angles a player might hold
+	static constexpr float aAngles[] = {
+		  0.f,  30.f, -30.f,  45.f, -45.f,
+		 60.f, -60.f,  90.f, -90.f, 120.f, -120.f,
+		135.f, -135.f, 150.f, -150.f, 180.f
+	};
+	vDirsOut.reserve(std::size(aAngles) + 1);
+	for (float flAngle : aAngles)
+	{
+		Vec3 vRot = Math::RotatePoint(vDir, {}, { 0.f, flAngle, 0.f });
+		vRot.z = 0.f;
+		if (vRot.Normalize() > 0.f)
+			vDirsOut.push_back(vRot);
+	}
+}
+
+static inline Vec3 SimulateCounterStrafePath(const Vec3& vStart, const Vec3& vVelocity, const Vec3& vWishDir,
+	float flMaxSpeed, float flAccel, float flFriction, bool bOnGround, int iTicks)
+{
+	Vec3 vVel = vVelocity;
+	Vec3 vPos = vStart;
+	for (int t = 0; t < iTicks; t++)
+		SimulateStrafeTick(vVel, vPos, vWishDir, flMaxSpeed, flAccel, flFriction, bOnGround, I::GlobalVars->interval_per_tick);
+	return vPos;
+}
+
+static inline float GetPlayerMaxSpeed(CTFPlayer* pEntity, CTFWeaponBase* pWeapon = nullptr)
+{
+	// The engine tracks live maxspeed; trust it when sane.
+	float flMax = pEntity->m_flMaxspeed();
+	if (flMax > 1.f)
+		return flMax;
+
+	// Fallback: replicate TF2's CalculateMaxSpeed
+	float flBase;
+	switch (pEntity->m_iClass())
+	{
+	case TF_CLASS_SCOUT:    flBase = 400.f; break;
+	case TF_CLASS_SOLDIER:  flBase = 240.f; break;
+	case TF_CLASS_PYRO:     flBase = 300.f; break;
+	case TF_CLASS_DEMOMAN:  flBase = 280.f; break;
+	case TF_CLASS_HEAVY:    flBase = 230.f; break;
+	case TF_CLASS_ENGINEER: flBase = 300.f; break;
+	case TF_CLASS_MEDIC:    flBase = 320.f; break;
+	case TF_CLASS_SNIPER:   flBase = 300.f; break;
+	case TF_CLASS_SPY:      flBase = 320.f; break;
+	default:                flBase = 300.f;
+	}
+
+	// Weapon-specific overrides that matter for strafing targets
+	if (pWeapon)
+	{
+		switch (pWeapon->GetWeaponID())
+		{
+		case TF_WEAPON_MINIGUN:
+			if (pEntity->InCond(TF_COND_AIMING))   flBase = 110.f;
+			break;
+		case TF_WEAPON_SNIPERRIFLE:
+		case TF_WEAPON_SNIPERRIFLE_CLASSIC:
+		case TF_WEAPON_SNIPERRIFLE_DECAP:
+			if (pEntity->InCond(TF_COND_ZOOMED))   flBase *= 0.45f;
+			break;
+		case TF_WEAPON_COMPOUND_BOW:
+			if (pEntity->InCond(TF_COND_AIMING))   flBase *= 0.6f;
+			break;
+		}
+	}
+
+	// Heavy while spun-up uses a hull-relative duck modifier in the engine,
+	// but for movement purposes a flat 1/3 is a close approximation.
+	if (pEntity->m_fFlags() & FL_DUCKING)
+		flBase *= 0.333f;
+
+	return flBase;
+}
+
+static inline std::vector<Vec3> BuildCounterStrafePositions(
+	const Vec3& vOriginalPos, const Vec3& vStartOrigin, const Vec3& vVelocity,
+	CTFPlayer* pEntity, CTFWeaponBase* pWeapon, int iTick)
+{
+	std::vector<Vec3> vPositions;
+	vPositions.push_back(vOriginalPos);
+
+	if (!CounterStrafeEnabled() || !pEntity || iTick < 1)
+		return vPositions;
+
+	Vec3 vVel = vVelocity;
+	float flSpeed = vVel.Length2D();
+	if (flSpeed < Vars::Aimbot::Projectile::CounterStrafeMinSpeed.Value)
+		return vPositions;
+
+	bool bOnGround = pEntity->IsOnGround();
+	if (!bOnGround && !Vars::Aimbot::Projectile::CounterStrafeAirborne.Value)
+		return vPositions;
+
+	// GetPlayerMaxSpeed now handles duck/weapon modifiers internally
+	float flMaxSpeed = GetPlayerMaxSpeed(pEntity, pWeapon);
+
+	const float flAccel = bOnGround ? Vars::Aimbot::Projectile::CounterStrafeGroundAccel.Value
+		: Vars::Aimbot::Projectile::CounterStrafeAirAccel.Value;
+	const float flFriction = Vars::Aimbot::Projectile::CounterStrafeGroundFriction.Value;
+	const int iTicks = Vars::Aimbot::Projectile::CounterStrafeTicks.Value;
+	const int iSimTicks = std::min(iTick, iTicks);
+
+	// GetCounterStrafeDirs now writes into an out-param
+	std::vector<Vec3> vDirs;
+	GetCounterStrafeDirs(vVel, Vars::Aimbot::Projectile::CounterStrafeMinSpeed.Value, vDirs);
+	if (vDirs.size() <= 1)
+		return vPositions;
+
+	int iMaxPaths = std::min((int)vDirs.size(), Vars::Aimbot::Projectile::CounterStrafeMaxPaths.Value);
+	for (int p = 0; p < iMaxPaths; p++)
+	{
+		Vec3 vPos = SimulateCounterStrafePath(vStartOrigin, vVel, vDirs[p],
+			flMaxSpeed, flAccel, flFriction, bOnGround, iSimTicks);
+		vPositions.push_back(vPos);
+	}
+
+	return vPositions;
+}
+
 static inline int GetHitboxPriority(int nHitbox, Target_t& tTarget, Info_t& tInfo, CBaseEntity* pProjectile = nullptr)
 {
 	if (!F::AimbotGlobal.IsHitboxValid(nHitbox, Vars::Aimbot::Projectile::Hitboxes.Value))
@@ -1475,20 +1720,28 @@ bool CAimbotProjectile::HandleDirect(DirectHistory_t& mDirectHistory)
 		}
 	}
 	std::sort(vDirectHistory.begin(), vDirectHistory.end(), [&](const Direct_t& a, const Direct_t& b) -> bool
-	{
-		return a.m_iPriority < b.m_iPriority;
-	});
-	m_flTimeTo = vDirectHistory.front().m_flTime + m_tInfo.m_flLatency;
+		{
+			if (a.m_bCounterStrafe != b.m_bCounterStrafe)
+				return !a.m_bCounterStrafe; // real path first
+			return a.m_iPriority < b.m_iPriority;
+		});
+
+	// If a non-counter-strafe (real) path exists, try only that first.
+	// Only fall back to counter-strafe paths if all real paths fail.
+	bool bHasReal = std::any_of(vDirectHistory.begin(), vDirectHistory.end(),
+		[](const Direct_t& d) { return !d.m_bCounterStrafe; });
 
 	for (auto& tHistory : vDirectHistory)
 	{
+		if (bHasReal && tHistory.m_bCounterStrafe)
+			continue; // skip counter-strafe while real paths are on the table
+
 		if (HandlePoint(tHistory.m_vOrigin, tHistory.m_iSimtime, tHistory.m_flPitch, tHistory.m_flYaw, tHistory.m_flTime, tHistory.m_vPoint, PointTypeEnum::Direct, iType))
 		{
 			bReturn = true;
 			break;
 		}
 	}
-
 	mDirectHistory.erase(it);
 	return bReturn;
 }
@@ -1504,9 +1757,11 @@ bool CAimbotProjectile::HandleSplash(SplashHistory_t& mSplashHistory)
 	auto& vSplashHistory = it->second;
 
 	std::sort(vSplashHistory.begin(), vSplashHistory.end(), [&](const Splash_t& a, const Splash_t& b) -> bool
-	{
-		return a.m_flTimeTo < b.m_flTimeTo;
-	});
+		{
+			if (a.m_bCounterStrafe != b.m_bCounterStrafe)
+				return !a.m_bCounterStrafe; // real path first
+			return a.m_flTimeTo < b.m_flTimeTo;
+		});
 	uint8_t iFlags = CalculateFlagsEnum::None;
 	if (iType == PointFlagsEnum::Lob)
 		iFlags |= CalculateFlagsEnum::LobAngle;
@@ -1592,7 +1847,11 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 	DirectHistory_t mDirectHistory = {};
 	SplashHistory_t mSplashHistory = {};
 
+	// Record movement history so we can simulate counter-strafe from a reaction-delayed state
+	struct MovementSnapshot { Vec3 vOrigin; Vec3 vVelocity; };
+	std::vector<MovementSnapshot> vSnapshots;
 	int iMaxTime = TIME_TO_TICKS(std::min(m_tProjInfo.m_flLifetime, Vars::Aimbot::Projectile::MaxSimulationTime.Value));
+
 	for (int i = 1 - TIME_TO_TICKS(m_tInfo.m_flLatency); i <= iMaxTime; i++)
 	{
 		if (!m_tMoveStorage.m_bFailed)
@@ -1603,82 +1862,138 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 		if (i < 0)
 			continue;
 
-		for (auto& [iIndex, tOffset] : mDirects)
+		// Snapshot the *predicted* movement state at this tick
+		vSnapshots.push_back({ m_tMoveStorage.m_vPredictedOrigin, m_tMoveStorage.m_MoveData.m_vecVelocity });
+
+		// Build positions to test at this tick
+		std::vector<Vec3> vTestPositions;
+		int iReactionDelay = Vars::Aimbot::Projectile::CounterStrafeReactionTicks.Value;
+
+		if (CounterStrafeEnabled() && tTarget.m_iTargetType == TargetEnum::Player
+			&& i >= iReactionDelay && (int)vSnapshots.size() > iReactionDelay)
 		{
-			if (m_tInfo.m_iArmTime && m_tInfo.m_iArmTime > i && !m_tMoveStorage.m_MoveData.m_vecVelocity.IsZero())
-				break;
+			// Simulate counter-strafe starting from the state (i - reactionDelay) ago,
+			// running forward iReactionDelay ticks to land at the current tick.
+			const auto& tReactionState = vSnapshots[vSnapshots.size() - 1 - iReactionDelay];
 
-			Vec3& vOffset = tOffset.m_vOffset;
-			uint8_t iType = tOffset.m_iFlags & -tOffset.m_iFlags;
+			vTestPositions = BuildCounterStrafePositions(
+				tTarget.m_vPos, tReactionState.vOrigin, tReactionState.vVelocity,
+				tTarget.m_pEntity->As<CTFPlayer>(), pWeapon, iReactionDelay);
+		}
+		else
+		{
+			vTestPositions.push_back(tTarget.m_vPos);
+		}
+		// Work on copies so every position gets a fair chance at consuming points
+		Directs_t mDirectsCopy = mDirects;
+		Splashes_t vSplashesCopy = vSplashes;
 
-			Vec3 vPoint = tTarget.m_vPos + vOffset;
-			if (Vars::Aimbot::Projectile::HuntsmanPullPoint.Value && tTarget.m_nAimedHitbox == HITBOX_HEAD)
+		for (size_t nPos = 0; nPos < vTestPositions.size(); nPos++)
+		{
+			bool bCounterStrafe = nPos > 0;
+			Vec3 vSavedPos = tTarget.m_vPos;
+			tTarget.m_vPos = vTestPositions[nPos];
+
+			// ── Direct history ──
+			for (auto it = mDirectsCopy.begin(); it != mDirectsCopy.end();)
 			{
-				vPoint = PullPoint(vPoint, m_tInfo.m_vLocalEye, m_tInfo, tTarget.m_vPos, tTarget.m_pEntity->m_vecMins() + m_tInfo.m_vHull, tTarget.m_pEntity->m_vecMaxs() - m_tInfo.m_vHull);
-				if (Vars::Aimbot::Projectile::HuntsmanPullNoZ.Value)
-					vPoint.z = tTarget.m_vPos.z + vOffset.z;
+				auto& [iIndex, tOffset] = *it;
+				if (m_tInfo.m_iArmTime && m_tInfo.m_iArmTime > i && !m_tMoveStorage.m_MoveData.m_vecVelocity.IsZero())
+					break;
+
+				Vec3& vOffset = tOffset.m_vOffset;
+				uint8_t iType = tOffset.m_iFlags & -tOffset.m_iFlags;
+
+				Vec3 vPoint = tTarget.m_vPos + vOffset;
+				if (Vars::Aimbot::Projectile::HuntsmanPullPoint.Value && tTarget.m_nAimedHitbox == HITBOX_HEAD)
+				{
+					vPoint = PullPoint(vPoint, m_tInfo.m_vLocalEye, m_tInfo, tTarget.m_vPos, tTarget.m_pEntity->m_vecMins() + m_tInfo.m_vHull, tTarget.m_pEntity->m_vecMaxs() - m_tInfo.m_vHull);
+					if (Vars::Aimbot::Projectile::HuntsmanPullNoZ.Value)
+						vPoint.z = tTarget.m_vPos.z + vOffset.z;
+				}
+
+				uint8_t iFlags = CalculateFlagsEnum::Accuracy;
+				if (iType == PointFlagsEnum::Lob)
+					iFlags |= CalculateFlagsEnum::LobAngle;
+				int iTolerance = m_tInfo.m_bIgnoreTiming && iType == PointFlagsEnum::Lob ? std::numeric_limits<int>::max() : -1;
+
+				Solution_t tSolution;
+				switch (iType)
+				{
+				case PointFlagsEnum::Lob:
+					if (ShouldLob(m_tMoveStorage, m_tInfo))
+						goto direct_end;
+					tSolution.m_iCalculated = CalculateResultEnum::Bad; break;
+				default: direct_end:
+					CalculateAngle(m_tInfo.m_vLocalEye, vPoint, i, tSolution, iFlags, iTolerance);
+				}
+
+				switch (tSolution.m_iCalculated)
+				{
+				case CalculateResultEnum::Good:
+				{
+					Direct_t tDirect{ History_t(tTarget.m_vPos, i), tSolution.m_flPitch, tSolution.m_flYaw, tSolution.m_flTime, vPoint, iIndex };
+					tDirect.m_bCounterStrafe = bCounterStrafe;
+					mDirectHistory[iType].push_back(tDirect);
+					[[fallthrough]];
+				}
+				case CalculateResultEnum::Bad:
+					tOffset.m_iFlags &= ~iType;
+					if (!tOffset.m_iFlags)
+						it = mDirectsCopy.erase(it);
+					else
+						++it;
+					break;
+				default:
+					++it;
+				}
 			}
 
-			uint8_t iFlags = CalculateFlagsEnum::Accuracy;
-			if (iType == PointFlagsEnum::Lob)
-				iFlags |= CalculateFlagsEnum::LobAngle;
-			int iTolerance = m_tInfo.m_bIgnoreTiming && iType == PointFlagsEnum::Lob ? std::numeric_limits<int>::max() : -1;
+			// ── Splash history ──
+			if (!bCounterStrafe || CounterStrafeOnSplash())
+			{
+				for (auto it = vSplashesCopy.begin(); it != vSplashesCopy.end();)
+				{
+					uint8_t iFlags = CalculateFlagsEnum::AccountDrag;
+					if (*it == PointFlagsEnum::Lob && !m_tInfo.m_bIgnoreTiming)
+						iFlags |= CalculateFlagsEnum::LobAngle;
 
-			Solution_t tSolution;
-			switch (iType)
-			{
-			case PointFlagsEnum::Lob:
-				if (ShouldLob(m_tMoveStorage, m_tInfo))
-					goto end;
-				tSolution.m_iCalculated = CalculateResultEnum::Bad; break;
-			default: end:
-				CalculateAngle(m_tInfo.m_vLocalEye, vPoint, i, tSolution, iFlags, iTolerance);
+					Solution_t tSolution; CalculateAngle(m_tInfo.m_vLocalEye, tTarget.m_vPos, i, tSolution, iFlags);
+					if (tSolution.m_iCalculated == CalculateResultEnum::Bad && mDirectsCopy.empty())
+					{
+						it = vSplashesCopy.erase(it);
+						continue;
+					}
+
+					const float flTimeTo = tSolution.m_flTime - TICKS_TO_TIME(i);
+					if (flTimeTo > m_tInfo.m_flRadiusTime || m_tInfo.m_iArmTime && m_tInfo.m_iArmTime > i)
+					{
+						++it;
+						continue;
+					}
+					if (flTimeTo < -m_tInfo.m_flRadiusTime && (!m_tInfo.m_iArmTime || m_tInfo.m_iArmTime < i))
+					{
+						it = vSplashesCopy.erase(it);
+						continue;
+					}
+					if (*it == PointFlagsEnum::Lob && !ShouldLob(m_tMoveStorage, m_tInfo))
+					{
+						++it;
+						continue;
+					}
+
+					Splash_t tSplash{ History_t(tTarget.m_vPos, i), fabsf(flTimeTo) };
+					tSplash.m_bCounterStrafe = bCounterStrafe;
+					mSplashHistory[*it].push_back(tSplash);
+					++it;
+				}
 			}
-			switch (tSolution.m_iCalculated)
-			{
-			case CalculateResultEnum::Good:
-				mDirectHistory[iType].emplace_back(History_t(tTarget.m_vPos, i), tSolution.m_flPitch, tSolution.m_flYaw, tSolution.m_flTime, vPoint, iIndex);
-				[[fallthrough]];
-			case CalculateResultEnum::Bad:
-				tOffset.m_iFlags &= ~iType;
-				if (!(tOffset.m_iFlags /*& (PointFlagsEnum::Regular | PointFlagsEnum::Lob)*/))
-					mDirects.erase(iIndex);
-			}
+
+			tTarget.m_vPos = vSavedPos;
 		}
 
-		for (auto it = vSplashes.begin(); it != vSplashes.end();)
-		{
-			uint8_t iFlags = CalculateFlagsEnum::AccountDrag;
-			if (*it == PointFlagsEnum::Lob && !m_tInfo.m_bIgnoreTiming)
-				iFlags |= CalculateFlagsEnum::LobAngle;
-
-			Solution_t tSolution; CalculateAngle(m_tInfo.m_vLocalEye, tTarget.m_vPos, i, tSolution, iFlags);
-			if (tSolution.m_iCalculated == CalculateResultEnum::Bad && mDirects.empty())
-			{
-				it = vSplashes.erase(it);
-				continue;
-			}
-
-			const float flTimeTo = tSolution.m_flTime - TICKS_TO_TIME(i);
-			if (flTimeTo > m_tInfo.m_flRadiusTime || m_tInfo.m_iArmTime && m_tInfo.m_iArmTime > i)
-			{
-				++it;
-				continue;
-			}
-			if (flTimeTo < -m_tInfo.m_flRadiusTime && (!m_tInfo.m_iArmTime || m_tInfo.m_iArmTime < i))
-			{
-				it = vSplashes.erase(it);
-				continue;
-			}
-			if (*it == PointFlagsEnum::Lob && !ShouldLob(m_tMoveStorage, m_tInfo))
-			{
-				++it;
-				continue;
-			}
-
-			mSplashHistory[*it].emplace_back(History_t(tTarget.m_vPos, i), fabsf(flTimeTo));
-			++it;
-		}
+		mDirects = mDirectsCopy;
+		vSplashes = vSplashesCopy;
 
 		if (mDirects.empty() && vSplashes.empty())
 			break;
@@ -2478,7 +2793,7 @@ bool CAimbotProjectile::AutoAirblast(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, 
 		return false;
 
 	//if (!G::AimTarget.m_iEntIndex)
-	//	G::AimTarget = { vTargets.front().m_pEntity->entindex(), I::GlobalVars->tickcount, 0 };
+	//	G::AimTarget = { vTargets.front().m_pEntity->entindex(), I::GlobalVars->tickcount, 0 };faaaa
 
 	for (auto& tTarget : vTargets)
 	{
