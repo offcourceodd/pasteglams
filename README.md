@@ -20,8 +20,9 @@ pasteglam
 
 ### i chose to make this project open source because I believe projects are better when people can learn from them contribute ideas and improve them together ur welcome to be part of the project.
 <p align="center">
-<img width="250" alt="lgoog" src="https://github.com/user-attachments/assets/255980d5-3f08-43a3-80a0-e2c06c6ef4ad" />
+<img width="250" alt="pasta" src="https://github.com/user-attachments/assets/b51ee471-831a-4c28-aad5-d0c33d186902" />
 </p>
+
 
 
 
