@@ -312,9 +312,9 @@ NAMESPACE_BEGIN(Vars)
 
 		NAMESPACE_BEGIN(Projectile)
 			CVarEnum(StrafePrediction, VA_LIST("Predict", "Strafe prediction"), 0b11, DROPDOWN_MULTI, "Off",
-				VA_LIST("Air strafing", "Ground strafing", "##Divider", "Counter-strafe", "##Divider", "Use on direct", "Use on splash"),
-				Air = 1 << 0, Ground = 1 << 1, CounterStrafe = 1 << 2, UseOnDirect = 1 << 3, UseOnSplash = 1 << 4,
-				All = Air | Ground | CounterStrafe | UseOnDirect | UseOnSplash);
+				VA_LIST("Air strafing", "Ground strafing", "##Divider", "Counter-strafe", "##Divider", "Use on direct", "Use on splash", "##Divider", "Snake"),
+				Air = 1 << 0, Ground = 1 << 1, CounterStrafe = 1 << 2, UseOnDirect = 1 << 3, UseOnSplash = 1 << 4, Snake = 1 << 5,
+				All = Air | Ground | CounterStrafe | UseOnDirect | UseOnSplash | Snake);
 		CVar(CounterStrafeTicks, "Counter-strafe ticks", 8, NOSAVE | DEBUGVAR | SLIDER_MIN, 1, 22);
 		CVar(CounterStrafeMaxPaths, "Counter-strafe paths", 3, NOSAVE | DEBUGVAR | SLIDER_MIN, 1, 6);
 		CVar(CounterStrafeMinSpeed, "Counter-strafe min speed", 50.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 300.f, 10.f);
@@ -324,7 +324,12 @@ NAMESPACE_BEGIN(Vars)
 		CVar(CounterStrafeAirAccel, "Counter-strafe air accel", 12.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 1.f, 100.f, 1.f);
 		CVar(CounterStrafeAirWishSpeedCap, "Counter-strafe air cap", 30.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 100.f, 5.f);
 		CVar(CounterStrafeDrawPaths, "Counter-strafe draw paths", false, NOSAVE | DEBUGVAR);
-		CVar(CounterStrafeReactionTicks, "Counter-strafe reaction ticks", 3, NOSAVE | DEBUGVAR | SLIDER_MIN, 0, 16);
+		CVar(CounterStrafeReactionTicks, "Counter-strafe reaction ticks", 3, NOSAVE | DEBUGVAR | SLIDER_MIN, 0, 16); //f
+		CVar(SnakeTicks, "Snake ticks", 8, NOSAVE | DEBUGVAR | SLIDER_MIN, 1, 22);
+		CVar(SnakeMinSpeed, "Snake min speed", 50.f, NOSAVE | DEBUGVAR | SLIDER_MIN | SLIDER_PRECISION, 0.f, 300.f, 10.f);
+		CVar(SnakeConfidence, "Snake confidence", 30.f, NOSAVE | DEBUGVAR | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
+		CVar(SnakeWindow, "Snake sample window", 8, NOSAVE | DEBUGVAR | SLIDER_MIN, 3, 16);
+		CVar(SnakeReversalWeight, "Snake reversal weight", 50.f, NOSAVE | DEBUGVAR | SLIDER_CLAMP | SLIDER_PRECISION, 0.f, 100.f, 5.f, "%g%%");
 			CVarEnum(SplashPrediction, VA_LIST("Splash", "Splash prediction"), 0, NONE, nullptr,
 				VA_LIST("Off", "Include", "Prefer", "Only"),
 				Off, Include, Prefer, Only);
@@ -908,7 +913,7 @@ NAMESPACE_BEGIN(Vars)
 		CVar(DetectionsRequired, "Detections required", 10, SLIDER_MIN, 0, 50);
 		CVar(MinChoking, "Min choking", 20, SLIDER_MIN, 4, 22);
 		CVar(MinFlick, "Min flick angle", 20.f, SLIDER_PRECISION, 10.f, 30.f); // min flick size to suspect
-		CVar(MaxNoise, "Max flick noise", 1.f, SLIDER_PRECISION, 1.f, 10.f); // max difference between angles before and after flick
+		CVar(MaxNoise, "Max flick noise", 1.f, SLIDER_PRECISION, 1.f, 10.f); // max difference between angles before and after flickf
 	NAMESPACE_END(CheatDetection)
 
 	NAMESPACE_BEGIN(Debug)
