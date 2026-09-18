@@ -20,12 +20,13 @@ pasteglam
 
 ### i chose to make this project open source because I believe projects are better when people can learn from them contribute ideas and improve them together ur welcome to be part of the project.
 
-https://discord.gg/FyMGkva6yt
+
 <p align="center">
 <img width="250" alt="pasta" src="https://github.com/user-attachments/assets/b51ee471-831a-4c28-aad5-d0c33d186902" />
 </p>
 
 
+[Join our Discord Server](https://discord.gg/FyMGkva6yt)
 
 
 
