@@ -25,8 +25,9 @@ pasteglam
 <img width="250" alt="pasta" src="https://github.com/user-attachments/assets/b51ee471-831a-4c28-aad5-d0c33d186902" />
 </p>
 
-
+<p align="center">
 [Join our Discord Server](https://discord.gg/FyMGkva6yt)
+</p>
 
 
 
