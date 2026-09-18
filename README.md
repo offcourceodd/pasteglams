@@ -1,7 +1,8 @@
 pasteglam 
 
 
- side project built for fun and experimentation where I test ideas, add quality-of-life improvements and experiment with new features whenever I have time to work on it.................some updates come quickly, while others take longer depending on my free time and what I'm interested in experimenting with.....dont expect insta updates
+ side project built for fun and experimentation where I test ideas, add quality-of-life improvements and experiment with new features whenever I have time to work on it.................some updates come quickly, while others take longer depending on my free time and what I'm interested in experimenting with.....dont expect insta updates..most important annoucements are in our discord sevrer..you can [Join](https://discord.gg/FyMGkva6yt) it here
+
 
 ## new stuff this fork has
 
@@ -25,9 +26,7 @@ pasteglam
 <img width="250" alt="pasta" src="https://github.com/user-attachments/assets/b51ee471-831a-4c28-aad5-d0c33d186902" />
 </p>
 
-<p align="center">
-[Join our Discord Server](https://discord.gg/FyMGkva6yt)
-</p>
+
 
 
 
