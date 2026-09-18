@@ -402,6 +402,15 @@ void CMenu::MenuAimbot(int iTab)
 						FSlider(Vars::Aimbot::Projectile::AutoRelease);
 					}
 					PopTransparent();
+					PushTransparent(!(Vars::Aimbot::Projectile::StrafePrediction.Value& Vars::Aimbot::Projectile::StrafePredictionEnum::Snake));
+					{
+						FSlider(Vars::Aimbot::Projectile::SnakeTicks, FSliderEnum::Left);
+						FSlider(Vars::Aimbot::Projectile::SnakeMinSpeed, FSliderEnum::Right);
+						FSlider(Vars::Aimbot::Projectile::SnakeConfidence, FSliderEnum::Left);
+						FSlider(Vars::Aimbot::Projectile::SnakeWindow, FSliderEnum::Right);
+						FSlider(Vars::Aimbot::Projectile::SnakeReversalWeight); //aaa
+					}
+				PopTransparent();
 				} EndSection();
 				if (Vars::Debug::Options.Value)
 				{
