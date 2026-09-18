@@ -8,7 +8,7 @@ pasteglam
 
 * new menu design 
 
-* changed ticks & crits indicators
+* changed ticks & crits indicators 
 
 * custom bind window 
 
