@@ -7,6 +7,7 @@
 #include "../AutoAirblast/AutoAirblast.h"
 #include "../../AntiCheatCompatibility/AntiCheatCompatibility.h"
 #include <numeric>
+#include <deque>  
 
 //#define SPLASH_DEBUG1 // trace splash visualization
 //#define SPLASH_DEBUG2 // plane splash visualization
@@ -397,11 +398,13 @@ static inline void SimulateStrafeTick(Vec3& vVelocity, Vec3& vPosition, const Ve
 		}
 	}
 
-	
+	// 3. Integrate position with the post-accel velocity (this was MISSING before)
+	vPosition += vVelocity * flFrametime;
+
 }
 
 // Finer 30° fan, and writes into a caller-provided buffer (no allocation)
-static inline void GetCounterStrafeDirs(const Vec3& vVelocity, float flMinSpeed,
+static inline void GetCounterStrafeDirs(const Vec3& vVelocity, float flViewYaw, float flMinSpeed,
 	std::vector<Vec3>& vDirsOut)
 {
 	vDirsOut.clear();
@@ -412,24 +415,15 @@ static inline void GetCounterStrafeDirs(const Vec3& vVelocity, float flMinSpeed,
 	if (flSpeed < flMinSpeed)
 		return;
 
-	Vec3 vDir = vVel2D / flSpeed;
-
-	// Prefer 8 main compass-ish dirs (real WASD combinations at 45°)
-	// plus finer 30° steps for angles a player might hold
-	static constexpr float aAngles[] = {
-		  0.f,  30.f, -30.f,  45.f, -45.f,
-		 60.f, -60.f,  90.f, -90.f, 120.f, -120.f,
-		135.f, -135.f, 150.f, -150.f, 180.f
-	};
+	static constexpr float aAngles[] = { 0.f, 45.f, -45.f, 90.f, -90.f, 135.f, -135.f, 180.f };
 	vDirsOut.reserve(std::size(aAngles) + 1);
 	for (float flAngle : aAngles)
 	{
-		Vec3 vRot = Math::RotatePoint(vDir, {}, { 0.f, flAngle, 0.f });
-		vRot.z = 0.f;
-		if (vRot.Normalize() > 0.f)
-			vDirsOut.push_back(vRot);
+		float flRad = Math::Deg2Rad(flViewYaw + flAngle);
+		vDirsOut.push_back(Vec3(cosf(flRad), sinf(flRad), 0.f));
 	}
 }
+
 
 static inline Vec3 SimulateCounterStrafePath(const Vec3& vStart, const Vec3& vVelocity, const Vec3& vWishDir,
 	float flMaxSpeed, float flAccel, float flFriction, bool bOnGround, int iTicks)
@@ -492,7 +486,7 @@ static inline float GetPlayerMaxSpeed(CTFPlayer* pEntity, CTFWeaponBase* pWeapon
 }
 
 static inline std::vector<Vec3> BuildCounterStrafePositions(
-	const Vec3& vOriginalPos, const Vec3& vStartOrigin, const Vec3& vVelocity,
+	const Vec3& vOriginalPos, const Vec3& vStartOrigin, const Vec3& vVelocity, float flViewYaw,
 	CTFPlayer* pEntity, CTFWeaponBase* pWeapon, int iTick)
 {
 	std::vector<Vec3> vPositions;
@@ -519,18 +513,143 @@ static inline std::vector<Vec3> BuildCounterStrafePositions(
 	const int iTicks = Vars::Aimbot::Projectile::CounterStrafeTicks.Value;
 	const int iSimTicks = std::min(iTick, iTicks);
 
-	// GetCounterStrafeDirs now writes into an out-param
 	std::vector<Vec3> vDirs;
-	GetCounterStrafeDirs(vVel, Vars::Aimbot::Projectile::CounterStrafeMinSpeed.Value, vDirs);
+	GetCounterStrafeDirs(vVel, flViewYaw, Vars::Aimbot::Projectile::CounterStrafeMinSpeed.Value, vDirs);
 	if (vDirs.size() <= 1)
 		return vPositions;
 
-	int iMaxPaths = std::min((int)vDirs.size(), Vars::Aimbot::Projectile::CounterStrafeMaxPaths.Value);
+	// Sort most-opposing-first so that with small MaxPaths budgets we test
+	// the directions that actually cancel velocity, not the identity dir.
+	Vec3 vVel2D = vVel; vVel2D.z = 0.f;
+	Vec3 vVelDir = vVel2D.Normalized();
+	std::sort(vDirs.begin() + 1, vDirs.end(),
+		[&](const Vec3& a, const Vec3& b) { return a.Dot(vVelDir) < b.Dot(vVelDir); });
+
+	int iMaxPaths = std::min((int)vDirs.size(), (int)Vars::Aimbot::Projectile::CounterStrafeMaxPaths.Value);
 	for (int p = 0; p < iMaxPaths; p++)
 	{
 		Vec3 vPos = SimulateCounterStrafePath(vStartOrigin, vVel, vDirs[p],
 			flMaxSpeed, flAccel, flFriction, bOnGround, iSimTicks);
 		vPositions.push_back(vPos);
+	}
+
+	return vPositions;
+}
+
+// ─── Snake prediction helpers ───────────────────────────────────────────────
+
+static inline bool SnakeEnabled()
+{
+	return Vars::Aimbot::Projectile::StrafePrediction.Value & Vars::Aimbot::Projectile::StrafePredictionEnum::Snake;
+}
+
+struct SnakeHistory_t
+{
+	std::deque<float> m_flLateralVel;
+	struct Sample { Vec3 vOrigin; Vec3 vVelocity; float flViewYaw; };
+	std::deque<Sample> m_vSamples;
+};
+
+static inline float SnakeConfidence(const SnakeHistory_t& tHistory)
+{
+	if (tHistory.m_flLateralVel.size() < 3)
+		return 0.f;
+
+	int iFlips = 0;
+	float flTotalDelta = 0.f;
+	for (size_t i = 1; i < tHistory.m_flLateralVel.size(); i++)
+	{
+		const float a = tHistory.m_flLateralVel[i - 1];
+		const float b = tHistory.m_flLateralVel[i];
+		if (a == 0.f || b == 0.f)
+			continue;
+		if ((a > 0.f) != (b > 0.f))
+		{
+			flTotalDelta += fabsf(b - a);
+			iFlips++;
+		}
+	}
+	if (iFlips == 0)
+		return 0.f;
+
+	return std::min(1.f, iFlips / 2.f) * std::min(1.f, flTotalDelta / 100.f);
+}
+
+static inline float LateralVelocity(const Vec3& vVelocity, float flViewYaw)
+{
+	Vec3 vRight(cosf(Math::Deg2Rad(flViewYaw + 90.f)),
+		sinf(Math::Deg2Rad(flViewYaw + 90.f)), 0.f);
+	return vVelocity.Dot(vRight);
+}
+
+static inline Vec3 SnakeWishDir(const Vec3& vVelocity, float flViewYaw, float flSideSign)
+{
+	Vec3 vVel2D = vVelocity; vVel2D.z = 0.f;
+	if (vVel2D.LengthSqr() < 1.f)
+		return {};
+
+	Vec3 vVelDir = vVel2D.Normalized();
+	float flRad = Math::Deg2Rad(flViewYaw + (flSideSign > 0 ? 90.f : -90.f));
+	Vec3 vStrafeDir(cosf(flRad), sinf(flRad), 0.f);
+
+	float flReversal = Vars::Aimbot::Projectile::SnakeReversalWeight.Value / 100.f;
+	return (vVelDir * -1.f * flReversal + vStrafeDir * (1.f - flReversal)).Normalized();
+}
+
+static inline std::vector<Vec3> BuildSnakePositions(
+	const Vec3& vOriginalPos, const Vec3& vStartOrigin, const Vec3& vVelocity, float flViewYaw,
+	CTFPlayer* pEntity, CTFWeaponBase* pWeapon, int iTick)
+{
+	std::vector<Vec3> vPositions;
+	vPositions.push_back(vOriginalPos);
+
+	if (!SnakeEnabled() || !pEntity || iTick < 1)
+		return vPositions;
+
+	Vec3 vVel = vVelocity;
+	float flSpeed = vVel.Length2D();
+	if (flSpeed < Vars::Aimbot::Projectile::SnakeMinSpeed.Value)
+		return vPositions;
+
+	bool bOnGround = pEntity->IsOnGround();
+	if (!bOnGround && !Vars::Aimbot::Projectile::CounterStrafeAirborne.Value)
+		return vPositions;
+
+	float flMaxSpeed = GetPlayerMaxSpeed(pEntity, pWeapon);
+	const float flAccel = bOnGround ? Vars::Aimbot::Projectile::CounterStrafeGroundAccel.Value
+		: Vars::Aimbot::Projectile::CounterStrafeAirAccel.Value;
+	const float flFriction = Vars::Aimbot::Projectile::CounterStrafeGroundFriction.Value;
+	const int   iTicks = Vars::Aimbot::Projectile::SnakeTicks.Value;
+	const int   iSimTicks = std::min(iTick, iTicks);
+
+	static constexpr float aSideSigns[] = { +1.f, -1.f, +1.f };
+
+	for (int i = 0; i < 3; i++)
+	{
+		Vec3 vWishDir = SnakeWishDir(vVel, flViewYaw, aSideSigns[i]);
+		if (vWishDir.IsZero())
+			continue;
+
+		if (i == 2 && iSimTicks > 1)
+		{
+			int iHalf = iSimTicks / 2;
+			Vec3 vPos = vStartOrigin;
+			Vec3 vLocalVel = vVel;
+			for (int t = 0; t < iSimTicks; t++)
+			{
+				float flSign = (t < iHalf) ? +1.f : -1.f;
+				Vec3 vDir = SnakeWishDir(vLocalVel, flViewYaw, flSign);
+				SimulateStrafeTick(vLocalVel, vPos, vDir, flMaxSpeed, flAccel, flFriction,
+					bOnGround, I::GlobalVars->interval_per_tick);
+			}
+			vPositions.push_back(vPos);
+		}
+		else
+		{
+			Vec3 vPos = SimulateCounterStrafePath(vStartOrigin, vVel, vWishDir,
+				flMaxSpeed, flAccel, flFriction, bOnGround, iSimTicks);
+			vPositions.push_back(vPos);
+		}
 	}
 
 	return vPositions;
@@ -1848,8 +1967,9 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 	SplashHistory_t mSplashHistory = {};
 
 	// Record movement history so we can simulate counter-strafe from a reaction-delayed state
-	struct MovementSnapshot { Vec3 vOrigin; Vec3 vVelocity; };
+	struct MovementSnapshot { Vec3 vOrigin; Vec3 vVelocity; float flViewYaw; };
 	std::vector<MovementSnapshot> vSnapshots;
+	std::deque<float> vLateralHistory;
 	int iMaxTime = TIME_TO_TICKS(std::min(m_tProjInfo.m_flLifetime, Vars::Aimbot::Projectile::MaxSimulationTime.Value));
 
 	for (int i = 1 - TIME_TO_TICKS(m_tInfo.m_flLatency); i <= iMaxTime; i++)
@@ -1863,22 +1983,66 @@ int CAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWeaponBas
 			continue;
 
 		// Snapshot the *predicted* movement state at this tick
-		vSnapshots.push_back({ m_tMoveStorage.m_vPredictedOrigin, m_tMoveStorage.m_MoveData.m_vecVelocity });
+				// Track yaw — use eye angles if available, else fall back to our own view yaw
+		float flViewYaw = tTarget.m_pEntity->As<CTFPlayer>()->GetEyeAngles().y;
+		if (flViewYaw == 0.f)
+			flViewYaw = I::EngineClient->GetViewAngles().y;
 
-		// Build positions to test at this tick
+		// Snapshot the *predicted* movement state at this tick
+		vSnapshots.push_back({ m_tMoveStorage.m_vPredictedOrigin,
+							   m_tMoveStorage.m_MoveData.m_vecVelocity,
+							   flViewYaw });
+
+		// Update lateral-velocity history for snake detection
+		vLateralHistory.push_back(
+			LateralVelocity(m_tMoveStorage.m_MoveData.m_vecVelocity, flViewYaw));
+		size_t kSnakeWindow = (size_t)Vars::Aimbot::Projectile::SnakeWindow.Value;
+		while (vLateralHistory.size() > kSnakeWindow)
+			vLateralHistory.pop_front();
+
 		std::vector<Vec3> vTestPositions;
 		int iReactionDelay = Vars::Aimbot::Projectile::CounterStrafeReactionTicks.Value;
 
-		if (CounterStrafeEnabled() && tTarget.m_iTargetType == TargetEnum::Player
+		const bool bWantCounterStrafe = CounterStrafeEnabled();
+		const bool bWantSnake = SnakeEnabled();
+
+		// Build positions to test at this tick
+		if ((bWantCounterStrafe || bWantSnake) && tTarget.m_iTargetType == TargetEnum::Player
 			&& i >= iReactionDelay && (int)vSnapshots.size() > iReactionDelay)
 		{
-			// Simulate counter-strafe starting from the state (i - reactionDelay) ago,
-			// running forward iReactionDelay ticks to land at the current tick.
 			const auto& tReactionState = vSnapshots[vSnapshots.size() - 1 - iReactionDelay];
 
-			vTestPositions = BuildCounterStrafePositions(
-				tTarget.m_vPos, tReactionState.vOrigin, tReactionState.vVelocity,
-				tTarget.m_pEntity->As<CTFPlayer>(), pWeapon, iReactionDelay);
+			// Real path is always tested first
+			vTestPositions.push_back(tTarget.m_vPos);
+
+			// Counter-strafe branches
+			if (bWantCounterStrafe)
+			{
+				auto vCS = BuildCounterStrafePositions(
+					tTarget.m_vPos, tReactionState.vOrigin, tReactionState.vVelocity,
+					tReactionState.flViewYaw, tTarget.m_pEntity->As<CTFPlayer>(),
+					pWeapon, iReactionDelay);
+				if (vCS.size() > 1)
+					vTestPositions.insert(vTestPositions.end(), vCS.begin() + 1, vCS.end());
+			}
+
+			// Snake branches — only if the motion actually looks snaky
+			if (bWantSnake)
+			{
+				SnakeHistory_t tSnakeHist;
+				tSnakeHist.m_flLateralVel.assign(vLateralHistory.begin(), vLateralHistory.end());
+				float flSnakeConf = SnakeConfidence(tSnakeHist);
+
+				if (flSnakeConf > Vars::Aimbot::Projectile::SnakeConfidence.Value / 100.f)
+				{
+					auto vSnake = BuildSnakePositions(
+						tTarget.m_vPos, tReactionState.vOrigin, tReactionState.vVelocity,
+						tReactionState.flViewYaw, tTarget.m_pEntity->As<CTFPlayer>(),
+						pWeapon, iReactionDelay);
+					if (vSnake.size() > 1)
+						vTestPositions.insert(vTestPositions.end(), vSnake.begin() + 1, vSnake.end());
+				}
+			}
 		}
 		else
 		{
@@ -2793,7 +2957,7 @@ bool CAimbotProjectile::AutoAirblast(CTFPlayer* pLocal, CTFWeaponBase* pWeapon, 
 		return false;
 
 	//if (!G::AimTarget.m_iEntIndex)
-	//	G::AimTarget = { vTargets.front().m_pEntity->entindex(), I::GlobalVars->tickcount, 0 };faaaa
+	//	G::AimTarget = { vTargets.front().m_pEntity->entindex(), I::GlobalVars->tickcount, 0 };faaaaa
 
 	for (auto& tTarget : vTargets)
 	{
